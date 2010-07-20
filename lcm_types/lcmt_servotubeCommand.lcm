@@ -1,0 +1,7 @@
+struct lcmt_servotubeCommand
+{
+	int64_t timestamp;
+
+	double commandValue;
+	int32_t commandType;
+}
