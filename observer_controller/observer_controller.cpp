@@ -23,10 +23,12 @@ static double meas[2] = {0.0,0.0};
 static double speedVkhz = .3;
 static double dt = .001/speedVkhz;
 
-static void cp_dynamics(const double* q, double* q_dot, const double* u);
+static void hcp_dynamics(const double* q, double* q_dot, const double* u);
 static double recenterAccelGen(double x,double xd);
 static double LQRbalancingAccelGen(double t,double x,double td,double xd);
 lcmt_servotubeCommand positionTrackingController(double Yr, double Y, double Yd);
+lcmt_servotubeCommand velocityTrackingController(double Ydr);
+lcmt_servotubeCommand balancingController(double y, double theta, double yd, double thetad);
 
 int readInSysIDFile(char*& filename, double*& wave);
 
@@ -43,23 +45,23 @@ int main(int argc, char** argv)
 	int sysIDlength = 0;
 	double* wave = NULL;
 
-	operatingMode = 1; //default to normal operation
+	operatingMode = 1; //default to recentering operation
 	if(argc > 1){
 		sscanf(argv[1],"%d",&operatingMode);
 	}
 
 	switch(operatingMode)
 	{
-	case 0:
-		//cease operation
+	case 0: //cease operation
+		printf("Commanding termination...\n");
 		break;
 
-	case 1:
-		//normal operation
+	case 1: //recenter operation
+		printf("Commanding recentering...\n");
 		break;
 
-	case 2:
-		//sysID operation
+	case 2: //sysID operation
+	case 3:
 		char* filename;
 		if(argc > 2)
 			filename = argv[2]; //get filename from command line
@@ -77,6 +79,13 @@ int main(int argc, char** argv)
 
 		//for(int tmp = 0; tmp<100; tmp++)
 		//	printf("Hey: %f\n",wave[tmp]);
+		break;
+
+	case 4: //balancing
+		printf("Executing balancing control...\n");
+		break;
+
+	case 99: //debug
 		break;
 
 	default:
@@ -101,7 +110,10 @@ int main(int argc, char** argv)
 
 	lcmt_servotubeCommand myComm;
 	CP_State state; state.y=0.0; state.theta=0.0; state.yd=0.0; state.thetad=0.0;
-	simpleObserver observer(dt, state);
+
+	double x0[] = {0.0, 0.0, 0.0, 0.0};
+	FGSE observer(hcp_dynamics, 4, dt, x0);
+	const double* state_est;
 
 	double lastu = 0.0;
 
@@ -124,8 +136,9 @@ int main(int argc, char** argv)
 		lastMsgNum=thisMsgNum;
 
 		//observer
-		observer.update(meas,lastu);
-		observer.getEstimate(&state);
+		observer.update(meas, &lastu);
+		state_est = observer.getEstimate();
+		state.y=state_est[0]; state.theta=state_est[1]; state.yd=state_est[2]; state.thetad=state_est[3];
 
 		//controller
 		switch(operatingMode)
@@ -136,19 +149,34 @@ int main(int argc, char** argv)
 			keepRunning = false;
 			break;
 
-		case 1: //normal operation
-			myComm.commandType=1;
-			myComm.commandValue=-.01;
+		case 1: //recentering operation
+			myComm.commandType=0;
+			myComm.commandValue=0.0;
+			keepRunning = false;
 			break;
 
 		case 2: //sysID position tracking
-			//myComm = positionTrackingController(wave[iter-1], Y, Yd);
-			myComm = positionTrackingController(wave[iter-1], state.y, state.yd);
+		case 3: //sysID velocity tracking
+			if(operatingMode == 2)
+				myComm = positionTrackingController(wave[iter-1], state.y, state.yd);
+			else //operatingMode == 3
+				myComm = velocityTrackingController(wave[iter-1]);
+
 			fprintf(outputFile, "%f, %f, ",meas[0], meas[1]); 
 
 			if(iter==sysIDlength) //turn off when reach end of tape
 				keepRunning = false;
 			break;
+
+		case 4: //balancing operation
+			myComm=balancingController(state.y, state.theta, state.yd, state.thetad);
+			break;
+
+		case 99: //debug operation
+			myComm.commandType=1;
+			myComm.commandValue=-.01;
+			break;
+
 
 		default:
 			keepRunning=false; //should never reach here
@@ -215,13 +243,36 @@ int readInSysIDFile(char*& filename, double*& wave)
 	}
 }
 
+lcmt_servotubeCommand balancingController(double y, double theta, double yd, double thetad)
+{
+	lcmt_servotubeCommand myComm;
+	myComm.commandType = 1; //acceleration command
+
+	double Kyp = .5, Kyd = .2; //p and d gains for y
+	double Ktp = -.5, Ktd = 0; //p and d gains for theta
+
+	myComm.commandValue = -Kyp*y - Kyd*yd -Ktp*theta - Ktd*thetad ;
+
+	return myComm;
+}
+
 lcmt_servotubeCommand positionTrackingController(double Yr, double Y, double Yd)
 {
 	lcmt_servotubeCommand myComm;
-	double Kp = .5, Kd = .3;
+	double Kp = 15, Kd = 5;
 
-	myComm.commandType = 1; //velocity command
+	myComm.commandType = 1; //acceleration command
 	myComm.commandValue = -Kp*(Y - Yr) - Kd*Yd;
+
+	return myComm;
+}
+
+lcmt_servotubeCommand velocityTrackingController(double Ydr)
+{
+	lcmt_servotubeCommand myComm;
+
+	myComm.commandType = 2; //velocity command
+	myComm.commandValue =Ydr;
 
 	return myComm;
 }
@@ -239,6 +290,15 @@ static double LQRbalancingAccelGen(double tbar,double x,double td,double xd)
 		);
 
 	return accel;
+}
+
+static void hcp_dynamics(const double* q, double* q_dot, const double* u){
+ 	q_dot[0]=q[2];//xd
+	q_dot[1]=q[3];//td
+	q_dot[2]=*u;//xdd
+
+	//tdd
+	q_dot[3]=0; //dont know yet!
 }
 
 static double recenterAccelGen(double x,double xd)

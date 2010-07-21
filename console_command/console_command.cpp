@@ -12,7 +12,7 @@ static double commandVal= 0.0;
 static int final_iter = 0;
 //end lcm
 
-enum operationStateTypes{ executeLCMCommand, idle, finishAndTerminate};
+enum operationStateTypes{ executeLCMCommand, recenter, idle, finishAndTerminate};
 
 clock_t lastCommandClock;
 double allowableCommandWait = .1;
@@ -114,7 +114,7 @@ int main(int argc, char** argv)
 		send_message (lcm, &myState);
 
 		//read in command if not finishing
-		if(operatingState != finishAndTerminate)
+		if(operatingState != finishAndTerminate && operatingState != recenter)
 		{
 			if(WaitForSingleObject(mutex, 10000)==WAIT_TIMEOUT)
 				printf("MUTEX TIMEOUT ERROR 4\n");
@@ -141,16 +141,23 @@ int main(int argc, char** argv)
 		{
 		case executeLCMCommand:
 			operatingState = parseLCMCommand(curCommType,curCommVal,CartPole);
-			//printf("CurCommType: %d  CurCommVal: %f\n",curCommType,curCommVal);
-			if(operatingState == finishAndTerminate)
-				printf("Stopping operation...\n");
+			break;
+
+		case recenter:
+			if(nearEnoughToZero(CartPole))
+			{
+				CartPole->set_vel_command(0.0);
+				operatingState = idle;
+			}
+			else
+				CartPole->accelerate(recenterAccelGen(measurements[0], CartPole->get_motor_vel()));
 			break;
 
 		case idle:
-			if(nearEnoughToZero(CartPole))
+			if(abs(CartPole->get_motor_vel())<.02)
 				CartPole->set_vel_command(0.0);
 			else
-				CartPole->accelerate(recenterAccelGen(measurements[0], CartPole->get_motor_vel()));
+				CartPole->accelerate(-15*CartPole->get_motor_vel());
 			break;
 
 		case finishAndTerminate:
@@ -195,6 +202,11 @@ static operationStateTypes parseLCMCommand(int curCommType, double curCommVal, S
 {
 	switch(curCommType)
 	{
+	case 0:
+		printf("Recentering...\n");
+		return recenter;
+		break;
+
 	case 1:
 		CartPole->accelerate(curCommVal);
 		return executeLCMCommand;
@@ -205,12 +217,13 @@ static operationStateTypes parseLCMCommand(int curCommType, double curCommVal, S
 		return executeLCMCommand;
 		break;
 
-
 	case -1:
+		printf("Stopping operation on terminate signal...\n");
 		return finishAndTerminate;
 		break;
 
 	default:
+		printf("LCM command not understood. Stopping operation...\n");
 		return finishAndTerminate;
 		break;
 	}

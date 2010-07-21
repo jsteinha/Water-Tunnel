@@ -8,6 +8,7 @@
 #include <process.h>
 #include <lcmt_servotubeCommand.h>
 #include <lcmt_servotubeState.h>
+#include <fixed_gain_state_est.h>
 
 unsigned __stdcall lcm_watcher(void *param);
 static void send_message (lcm_t*, lcmt_servotubeCommand*);
