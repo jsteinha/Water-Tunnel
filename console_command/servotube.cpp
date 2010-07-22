@@ -54,7 +54,7 @@ void ServoTube::update()
 
 	++buf_index;
 	buf_index=buf_index%buf_length;
-	load_enc_buf[buf_index]=-1.0*((double)enc_ticks)*COUNTS_TO_RAD; //invert sign to match right hand rule and simulation
+	load_enc_buf[buf_index]=((double)enc_ticks)*COUNTS_TO_RAD;
 	motor_pos_buf[buf_index]=((double)mot_ticks)*COUNTS_TO_METERS;
 }
 
