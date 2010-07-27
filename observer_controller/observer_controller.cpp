@@ -6,12 +6,14 @@
 #include <iostream>
 #include <iomanip>
 #include <string>
-#include "simpleObserver.h"
+#include <math.h>
 
 //lcm
 static lcmt_servotubeState_subscription_t * sub;
 static lcm_t * lcm;
 //end lcm
+
+static const double PI = 3.14159265358979;
 
 static double position = 0.0;
 static double secondaryPosition= 0.0;
@@ -23,50 +25,64 @@ static double meas[2] = {0.0,0.0};
 static double speedVkhz = .3;
 static double dt = .001/speedVkhz;
 
-static void cp_dynamics(const double* q, double* q_dot, const double* u);
+static void hcp_dynamics(const double* q, double* q_dot, const double* u);
 static double recenterAccelGen(double x,double xd);
 static double LQRbalancingAccelGen(double t,double x,double td,double xd);
 lcmt_servotubeCommand positionTrackingController(double Yr, double Y, double Yd);
+lcmt_servotubeCommand velocityTrackingController(double Ydr);
+lcmt_servotubeCommand balancingController(double y, double theta, double yd, double thetad);
+lcmt_servotubeCommand IDBalancingController(double y, double theta, double yd, double thetad, double yr, double ydr);
 
-int readInSysIDFile(char*& filename, double*& wave);
+inline double mod_by_2PI(double th) { return fmod(fmod(th,2*PI)+3*PI,2*PI)-PI;; }
+
+int readInSysIDFile(char*& filename, double*& wave, int entriesPerDT);
 
 int main(int argc, char** argv)
 {
 	bool isOutputting = false;
 	bool keepRunning = true;
 	bool finishExecution = false;
-	int operatingMode; //1 normal, 2 sysID
+	int operatingMode;
 	FILE* outputFile;
 	char outputFilename[46] = "out_";
+	int entriesPerDT = 1;
 
 	//sysid variables
 	int sysIDlength = 0;
 	double* wave = NULL;
 
-	operatingMode = 1; //default to normal operation
+	operatingMode = 1; //default to recentering operation
 	if(argc > 1){
 		sscanf(argv[1],"%d",&operatingMode);
 	}
 
 	switch(operatingMode)
 	{
-	case 0:
-		//cease operation
+	case 0: //cease operation
+		printf("Commanding termination...\n");
 		break;
 
-	case 1:
-		//normal operation
+	case 1: //recenter operation
+		printf("Commanding recentering...\n");
 		break;
 
-	case 2:
-		//sysID operation
+	case 2: //balancing
+		printf("Executing balancing control...\n");
+		break;
+
+	case 3: //sysID operation
+	case 4:
+	case 5:
 		char* filename;
 		if(argc > 2)
 			filename = argv[2]; //get filename from command line
 		else
 			filename = NULL; //prompt for file name in readInSysIDFile(...)
 
-		sysIDlength = readInSysIDFile(filename, wave);
+		if(operatingMode==5) //else entriesPerDT = 1 (set at declaration)
+			entriesPerDT=2;
+
+		sysIDlength = readInSysIDFile(filename, wave, entriesPerDT);
 
 		strcat(outputFilename, filename);
 		outputFile = fopen(outputFilename, "w");
@@ -74,9 +90,9 @@ int main(int argc, char** argv)
 
 		if(sysIDlength<0) //file reading error
 			keepRunning = false;
+		break;
 
-		//for(int tmp = 0; tmp<100; tmp++)
-		//	printf("Hey: %f\n",wave[tmp]);
+	case 99: //debug
 		break;
 
 	default:
@@ -101,18 +117,18 @@ int main(int argc, char** argv)
 
 	lcmt_servotubeCommand myComm;
 	CP_State state; state.y=0.0; state.theta=0.0; state.yd=0.0; state.thetad=0.0;
-	simpleObserver observer(dt, state);
+
+	double x0[] = {0.0, 0.0, 0.0, 0.0};
+	FGSE observer(hcp_dynamics, 4, dt, x0);
+	const double* state_est;
 
 	double lastu = 0.0;
 
-	//system("pause");
 	while(keepRunning)//begin control loop
 	{
 		iter++;
 
 		//keep handling until you get a new state measurement
-		//(may want to change this so that observer/controller
-		//run on their own clock)
 		while(lastMsgNum==thisMsgNum)
 		{
 			lcm_handle(lcm);
@@ -124,8 +140,9 @@ int main(int argc, char** argv)
 		lastMsgNum=thisMsgNum;
 
 		//observer
-		observer.update(meas,lastu);
-		observer.getEstimate(&state);
+		observer.update(meas, &lastu);
+		state_est = observer.getEstimate();
+		state.y=state_est[0]; state.theta=state_est[1]; state.yd=state_est[2]; state.thetad=state_est[3];
 
 		//controller
 		switch(operatingMode)
@@ -136,19 +153,45 @@ int main(int argc, char** argv)
 			keepRunning = false;
 			break;
 
-		case 1: //normal operation
+		case 1: //recentering operation
+			myComm.commandType=0;
+			myComm.commandValue=0.0;
+			keepRunning = false;
+			break;
+
+		case 2: //balancing operation
+			//printf("theta: %f\n",mod_by_2PI(state.theta));
+			myComm=balancingController(state.y, mod_by_2PI(state.theta), state.yd, state.thetad);
+			break;
+
+		case 3: //sysID position tracking
+		case 4: //sysID velocity tracking
+			if(operatingMode == 2)
+				myComm = positionTrackingController(wave[iter-1], state.y, state.yd);
+			else //operatingMode == 3
+				myComm = velocityTrackingController(wave[iter-1]);
+
+			fprintf(outputFile, "%f, %f, ",meas[0], meas[1]); 
+
+			if(iter==sysIDlength/entriesPerDT) //turn off when reach end of tape
+				keepRunning = false;
+			break;
+
+		case 5: //sysID closed-loop
+			myComm = IDBalancingController(state.y, state.theta, 
+				state.yd, state.thetad, wave[2*iter-2], wave[2*iter-1]);
+
+			fprintf(outputFile, "%f, %f, ",meas[0], meas[1]); 
+
+			if(iter==sysIDlength/entriesPerDT) //turn off when reach end of tape
+				keepRunning = false;
+			break;
+
+		case 99: //debug operation
 			myComm.commandType=1;
 			myComm.commandValue=-.01;
 			break;
 
-		case 2: //sysID position tracking
-			//myComm = positionTrackingController(wave[iter-1], Y, Yd);
-			myComm = positionTrackingController(wave[iter-1], state.y, state.yd);
-			fprintf(outputFile, "%f, %f, ",meas[0], meas[1]); 
-
-			if(iter==sysIDlength) //turn off when reach end of tape
-				keepRunning = false;
-			break;
 
 		default:
 			keepRunning=false; //should never reach here
@@ -166,7 +209,7 @@ int main(int argc, char** argv)
 ////////////////////////////
 //Helper functions
 ////////////////////////////
-int readInSysIDFile(char*& filename, double*& wave)
+int readInSysIDFile(char*& filename, double*& wave, int entriesPerDT)
 {
 	char curVal[15];
 	int whichWaveEl=0;
@@ -189,7 +232,7 @@ int readInSysIDFile(char*& filename, double*& wave)
 	else
 	{
 		inf.getline(curVal, 15);
-		sysIDlength = strtol(curVal, NULL, 0);
+		sysIDlength = entriesPerDT*strtol(curVal, NULL, 0);
 		wave = new double[sysIDlength];
 
 		while(!inf.getline(curVal, 15).eof())
@@ -215,13 +258,61 @@ int readInSysIDFile(char*& filename, double*& wave)
 	}
 }
 
+lcmt_servotubeCommand balancingController(double y, double theta, double yd, double thetad)
+{
+	lcmt_servotubeCommand myComm;
+	myComm.commandType = 1; //acceleration command
+
+	double Kyp = -0.8, Kyd = -0.56; //p and d gains for y
+	double Ktp = 0.277, Ktd = 0.42; //p and d gains for theta
+
+	//double Kyp = -3.87, Kyd = -7.65; //p and d gains for y
+	//double Ktp = 4.680, Ktd = 1.14; //p and d gains for theta
+
+	//double Kyp = -.71, Kyd = -.935; //p and d gains for y
+	//double Ktp = .92, Ktd = .205; //p and d gains for theta
+
+	myComm.commandValue = -Kyp*y - Kyd*yd -Ktp*theta - Ktd*thetad ;
+
+	return myComm;
+}
+
+lcmt_servotubeCommand IDBalancingController(double y, double theta, double yd, double thetad, double yr, double ydr)
+{
+	lcmt_servotubeCommand myComm;
+	myComm.commandType = 1; //acceleration command
+
+	double Kyp = -0.8, Kyd = -0.56; //p and d gains for y
+	double Ktp = 0.277, Ktd = 0.42; //p and d gains for theta
+
+	//double Kyp = -3.87, Kyd = -7.65; //p and d gains for y
+	//double Ktp = 4.680, Ktd = 1.14; //p and d gains for theta
+
+	//double Kyp = -.71, Kyd = -.935; //p and d gains for y
+	//double Ktp = .92, Ktd = .205; //p and d gains for theta
+
+	myComm.commandValue = -Kyp*(y-yr) - Kyd*(yd-ydr) -Ktp*theta - Ktd*thetad ;
+
+	return myComm;
+}
+
 lcmt_servotubeCommand positionTrackingController(double Yr, double Y, double Yd)
 {
 	lcmt_servotubeCommand myComm;
-	double Kp = .5, Kd = .3;
+	double Kp = 15, Kd = 5;
 
-	myComm.commandType = 1; //velocity command
+	myComm.commandType = 1; //acceleration command
 	myComm.commandValue = -Kp*(Y - Yr) - Kd*Yd;
+
+	return myComm;
+}
+
+lcmt_servotubeCommand velocityTrackingController(double Ydr)
+{
+	lcmt_servotubeCommand myComm;
+
+	myComm.commandType = 2; //velocity command
+	myComm.commandValue =Ydr;
 
 	return myComm;
 }
@@ -239,6 +330,34 @@ static double LQRbalancingAccelGen(double tbar,double x,double td,double xd)
 		);
 
 	return accel;
+}
+
+static void hcp_dynamics(const double* q, double* q_dot, const double* u){
+ 	q_dot[0]=q[2];//xd
+	q_dot[1]=q[3];//td
+	q_dot[2]=*u;//xdd
+
+	//double v=0.157;
+	//double l=0.397;
+
+	//double c1=75.186;
+	//double c2=16.927;
+	//tdd at downright   theta     yd          thetad     u
+	//q_dot[3]= -pow(v,2)*c1*q[1] -c1*v*q[2] -c1*v*l*q[3] -c2*(*u);
+
+	//tdd at upright    theta     yd          thetad     u
+	//q_dot[3]= pow(v,2)*c1*q[1] +c1*v*q[2] -c1*v*l*q[3] +c2*(*u);
+
+	double a=17.4;
+	double b=9.69;
+	double c=4.61;
+	double d=0.900;
+
+	//tdd at downright   theta     yd      thetad     u
+	//q_dot[3]=            -d*q[1] -b*q[2]   -c*q[3]  -a*(*u);
+
+	//tdd at upright    theta     yd       thetad     u
+	q_dot[3]=            d*q[1] +b*q[2]   -c*q[3]  +a*(*u);
 }
 
 static double recenterAccelGen(double x,double xd)

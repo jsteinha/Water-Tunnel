@@ -34,7 +34,7 @@ void simpleObserver::update (double* meas_in, const double u)
 	x_hat.yd = x_hat.yd + dt*x_hatd.yd;
 	x_hat.thetad = x_hat.thetad + dt*x_hatd.thetad;
 
-	printf("y: %f   yd: %f\n",x_hat.y, x_hat.yd);
+	//printf("y: %f   yd: %f\n",x_hat.y, x_hat.yd);
 }
 
 void simpleObserver::dyn(CP_State curState, CP_State* curState_dot, const double u)
