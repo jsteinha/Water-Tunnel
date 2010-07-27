@@ -1,5 +1,6 @@
 function fling(folder,option)
     system('kinit');
+    system('aklog');
     if system(sprintf('mkdir /afs/csail.mit.edu/group/locomotion/data/water_tunnel/%s',folder))
         if nargin < 2 || option ~= 'f'
             return;
