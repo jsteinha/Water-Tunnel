@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <math.h>
+#include <learning_at_balance.h>
 
 //lcm stuff
 #include <lcm/lcm.h>
@@ -11,13 +12,6 @@
 #include <fixed_gain_state_est.h>
 
 //cp state
-struct CP_State{
-		double y;
-		double yd;
-		double theta;
-		double thetad;
-};
-
 
 unsigned __stdcall lcm_watcher(void *param);
 static void send_message (lcm_t*, lcmt_servotubeCommand*);

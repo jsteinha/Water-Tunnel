@@ -28,24 +28,31 @@ static double dt = .001/speedVkhz;
 static void hcp_dynamics(const double* q, double* q_dot, const double* u);
 static double recenterAccelGen(double x,double xd);
 static double LQRbalancingAccelGen(double t,double x,double td,double xd);
-lcmt_servotubeCommand positionTrackingController(double Yr, double Y, double Yd);
-lcmt_servotubeCommand velocityTrackingController(double Ydr);
-lcmt_servotubeCommand balancingController(double y, double theta, double yd, double thetad);
-lcmt_servotubeCommand IDBalancingController(double y, double theta, double yd, double thetad, double yr, double ydr);
+static lcmt_servotubeCommand positionTrackingController(double Yr, double Y, double Yd);
+static lcmt_servotubeCommand velocityTrackingController(double Ydr);
+static lcmt_servotubeCommand balancingController(double y, double theta, double yd, double thetad);
+static lcmt_servotubeCommand IDBalancingController(double y, double theta, double yd, double thetad, double yr, double ydr);
+static double costFunc(const double*, const double*);
 
-inline double mod_by_2PI(double th) { return fmod(fmod(th,2*PI)+3*PI,2*PI)-PI;; }
+static inline double mod_by_2PI(double th) { return fmod(fmod(th,2*PI)+3*PI,2*PI)-PI;; }
 
-int readInSysIDFile(char*& filename, double*& wave, int entriesPerDT);
+static int readInSysIDFile(char*& filename, double*& wave, int entriesPerDT);
 
 int main(int argc, char** argv)
 {
-	bool isOutputting = false;
+	bool sysIDOutputting = false;
+	bool isLearning = false;
 	bool keepRunning = true;
 	bool finishExecution = false;
+
 	int operatingMode;
 	FILE* outputFile;
+	FILE* learningRecord;
 	char outputFilename[46] = "out_";
 	int entriesPerDT = 1;
+
+	LaBcontroller balanceLearner;
+	const int itersPerUpdate = 3000;
 
 	//sysid variables
 	int sysIDlength = 0;
@@ -86,10 +93,21 @@ int main(int argc, char** argv)
 
 		strcat(outputFilename, filename);
 		outputFile = fopen(outputFilename, "w");
-		isOutputting = true;
+		sysIDOutputting = true;
 
 		if(sysIDlength<0) //file reading error
 			keepRunning = false;
+		break;
+
+	case 6: //learning at balance
+		isLearning = true;
+		learningRecord = fopen("learningRecord.dat", "w");
+		printf("Executing learning at balance control...\n");
+		{
+			double initialGains[]={-0.8, 0.277, -0.56, 0.42};
+			balanceLearner = *(new LaBcontroller(costFunc,initialGains, dt, 4));
+			//set learning params here if default is bad
+		}
 		break;
 
 	case 99: //debug
@@ -113,7 +131,7 @@ int main(int argc, char** argv)
 	ReleaseMutex(mutex);
 	//lcm_watcher_thread =(HANDLE)_beginthreadex( NULL , 0,&lcm_watcher, lcm, 0, &lcm_watcher_thread_ID);
 
-	int iter=0;
+	unsigned int iter=0;
 
 	lcmt_servotubeCommand myComm;
 	CP_State state; state.y=0.0; state.theta=0.0; state.yd=0.0; state.thetad=0.0;
@@ -123,6 +141,7 @@ int main(int argc, char** argv)
 	const double* state_est;
 
 	double lastu = 0.0;
+	double episodeCost = 0.0;
 
 	while(keepRunning)//begin control loop
 	{
@@ -187,6 +206,17 @@ int main(int argc, char** argv)
 				keepRunning = false;
 			break;
 
+		case 6: //learning at balance
+			myComm = balanceLearner.getBalancingCommand(state);
+
+			if(iter%itersPerUpdate == 0)
+			{
+				episodeCost = balanceLearner.performUpdate();
+				printf("Cost: %f\n", episodeCost);
+				fprintf(learningRecord, "%f, ",episodeCost);
+			}
+			break;
+
 		case 99: //debug operation
 			myComm.commandType=1;
 			myComm.commandValue=-.01;
@@ -201,15 +231,33 @@ int main(int argc, char** argv)
 		send_message (lcm, &myComm);
 	}
 
-	if(isOutputting)
+	if(sysIDOutputting)
 		fclose(outputFile);
+
+	if(isLearning)
+		fclose(learningRecord);
 
 	return 0;
 }
 ////////////////////////////
 //Helper functions
 ////////////////////////////
-int readInSysIDFile(char*& filename, double*& wave, int entriesPerDT)
+static double costFunc(const double* x, const double* u)
+{
+	double R= .01;
+	double diagQ[] ={20, 5, 2, .5};
+
+	int STATE_DIM = 4;
+
+	double cost=R*pow((*u),2);
+
+	for(int i=0; i<STATE_DIM; i++)
+		cost +=diagQ[i]*pow(x[i],2);
+
+	return cost;
+}
+
+static int readInSysIDFile(char*& filename, double*& wave, int entriesPerDT)
 {
 	char curVal[15];
 	int whichWaveEl=0;
@@ -258,45 +306,35 @@ int readInSysIDFile(char*& filename, double*& wave, int entriesPerDT)
 	}
 }
 
-lcmt_servotubeCommand balancingController(double y, double theta, double yd, double thetad)
+static lcmt_servotubeCommand balancingController(double y, double theta, double yd, double thetad)
 {
 	lcmt_servotubeCommand myComm;
 	myComm.commandType = 1; //acceleration command
 
 	double Kyp = -0.8, Kyd = -0.56; //p and d gains for y
 	double Ktp = 0.277, Ktd = 0.42; //p and d gains for theta
-
-	//double Kyp = -3.87, Kyd = -7.65; //p and d gains for y
-	//double Ktp = 4.680, Ktd = 1.14; //p and d gains for theta
-
-	//double Kyp = -.71, Kyd = -.935; //p and d gains for y
-	//double Ktp = .92, Ktd = .205; //p and d gains for theta
 
 	myComm.commandValue = -Kyp*y - Kyd*yd -Ktp*theta - Ktd*thetad ;
 
 	return myComm;
+
 }
 
-lcmt_servotubeCommand IDBalancingController(double y, double theta, double yd, double thetad, double yr, double ydr)
+static lcmt_servotubeCommand IDBalancingController(double y, double theta, double yd, 
+												   double thetad, double yr, double ydr)
 {
 	lcmt_servotubeCommand myComm;
 	myComm.commandType = 1; //acceleration command
 
 	double Kyp = -0.8, Kyd = -0.56; //p and d gains for y
 	double Ktp = 0.277, Ktd = 0.42; //p and d gains for theta
-
-	//double Kyp = -3.87, Kyd = -7.65; //p and d gains for y
-	//double Ktp = 4.680, Ktd = 1.14; //p and d gains for theta
-
-	//double Kyp = -.71, Kyd = -.935; //p and d gains for y
-	//double Ktp = .92, Ktd = .205; //p and d gains for theta
 
 	myComm.commandValue = -Kyp*(y-yr) - Kyd*(yd-ydr) -Ktp*theta - Ktd*thetad ;
 
 	return myComm;
 }
 
-lcmt_servotubeCommand positionTrackingController(double Yr, double Y, double Yd)
+static lcmt_servotubeCommand positionTrackingController(double Yr, double Y, double Yd)
 {
 	lcmt_servotubeCommand myComm;
 	double Kp = 15, Kd = 5;
@@ -307,7 +345,7 @@ lcmt_servotubeCommand positionTrackingController(double Yr, double Y, double Yd)
 	return myComm;
 }
 
-lcmt_servotubeCommand velocityTrackingController(double Ydr)
+static lcmt_servotubeCommand velocityTrackingController(double Ydr)
 {
 	lcmt_servotubeCommand myComm;
 
@@ -337,24 +375,10 @@ static void hcp_dynamics(const double* q, double* q_dot, const double* u){
 	q_dot[1]=q[3];//td
 	q_dot[2]=*u;//xdd
 
-	//double v=0.157;
-	//double l=0.397;
-
-	//double c1=75.186;
-	//double c2=16.927;
-	//tdd at downright   theta     yd          thetad     u
-	//q_dot[3]= -pow(v,2)*c1*q[1] -c1*v*q[2] -c1*v*l*q[3] -c2*(*u);
-
-	//tdd at upright    theta     yd          thetad     u
-	//q_dot[3]= pow(v,2)*c1*q[1] +c1*v*q[2] -c1*v*l*q[3] +c2*(*u);
-
 	double a=17.4;
 	double b=9.69;
 	double c=4.61;
 	double d=0.900;
-
-	//tdd at downright   theta     yd      thetad     u
-	//q_dot[3]=            -d*q[1] -b*q[2]   -c*q[3]  -a*(*u);
 
 	//tdd at upright    theta     yd       thetad     u
 	q_dot[3]=            d*q[1] +b*q[2]   -c*q[3]  +a*(*u);
