@@ -13,13 +13,15 @@ for i = 1:N
     trial = trials(i);
     out = dlmread(sprintf('out_sysid%d.dat',trial));
     y = out(1:2:end-1)';
-    ttape = dt * (1:numel(y));
     theta = out(2:2:end-1)';
     params = fscanf(fopen(sprintf('misc%d.dat',trial),'r'),'frequency: %22f\nmagnitude:%22f\n');
     in = dlmread(sprintf('sysid%d.dat',trial));
     ytilde = in(2:2:end);
     ydottilde = in(3:2:end);
     u = -(F*[ytilde';zeros(1,numel(ytilde));ydottilde';zeros(1,numel(ydottilde))])';
+    y = y(1:numel(u));
+    theta = theta(1:numel(u));
+    ttape = dt * (0:numel(y)-1);
     omegas(i) = params(1);
     ks(i) = round(dt*numel(y)*omegas(i)/(2*pi));
 
