@@ -1,4 +1,4 @@
-K=4;
+K=2;
 %%
 data = cell(K,1);
 for i=1:K
@@ -14,10 +14,10 @@ for i=1:K
 end
 %%
 dt = 0.003;
-N = cell(4,1);
-T = cell(4,1);
-ttape = cell(4,1);
-for i=1:4
+N = cell(K,1);
+T = cell(K,1);
+ttape = cell(K,1);
+for i=1:K
     N{i} = numel(theta{i});
     T{i} = dt*N{i};
     ttape{i} = dt*(0:N{i}-1)';
