@@ -14,8 +14,10 @@ for i=1:K
     d2theta{i} = ([dtheta{i}(2:end);0]-[0;dtheta{i}(1:end-1)])/(2*dt);
 end
 %% visualize a trial
-trial=1;
-plot(ttape{trial},thetas{trial})
+figure(1);
+trial=4;
+plot(ttape{trial},theta{trial})
+%axis([20 35 -0.025 0.00])
 % plot(fftshift(abs(fft(thetas{trial}))))
 % plot(unwrap(angle(hilbert(thetas{trial}(:)))))
 % H = unwrap(angle(hilbert(thetas{trial}(:))));
@@ -27,8 +29,8 @@ plot(ttape{trial},thetas{trial})
 
 
 %%
-start=[5.0 6.0 4.7 4.0];
-fin=[119.5 100.0 14.4 164.5];
+start=[5.0 5.0 3.8 5.0];
+fin=[115.0 102.0 12.0 165];
 si=round(start/dt);
 ei=round(fin/dt);
 t2=cell(K,1); th2=cell(K,1); dth2=cell(K,1); d2th2=cell(K,1);
@@ -45,10 +47,9 @@ for i=1:K
     N{i}=numel(region);
 end
 clear region;
-
 %% break the data up into regions, discard non-linear regions
 ts = 0.19; % timescale for a region
-alpha = 0.05; % only take regions where norm(Ax-b,2) < alpha * norm(b,2)
+alpha = 1.09; % only take regions where norm(Ax-b,2) < alpha * norm(b,2)
 
 A = [];
 b = [];
@@ -58,7 +59,7 @@ for i=1:K
     for j=1:N{i}/d
         ptape = d*(j-1)+1:d*j;
         tt = dt*(0:numel(ptape)-1)';
-        nA = [th2{i}(ptape) dth3{i}(ptape) y2{i}(ptape) dy2{i}(ptape) d2y2{i}(ptape) ones(numel(ptape),1)];
+        nA = [th2{i}(ptape) dth2{i}(ptape) y2{i}(ptape) dy2{i}(ptape) d2y2{i}(ptape) ones(numel(ptape),1)];
         nb = [d2th2{i}(ptape)];
         nc = nA\nb;
         if norm(nA*nc-nb,2) < alpha * norm(nb,2)
@@ -101,9 +102,9 @@ rel=A(:,[1 4])\A(:,2)
 norm(A(:,[1 4])*rel-A(:,2),2)/...
 norm(A(:,2),2)
 %%
-cols = [1 2 4 5];
-%cond(A(:,cols))
-coefs = A(:,cols)\b
+cols = [1 2 5];
+cond(A(:,cols))
+coefs = A(:,cols)\b;
 %%
 [norm(A(:,cols)*coefs-b,2)...
     %norm(A(:,cols)*coefs2-b,2)...

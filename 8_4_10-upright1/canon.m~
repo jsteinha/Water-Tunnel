@@ -1,0 +1,45 @@
+coefs = A(:,[1 2 4 5])\b
+%%
+dt = 0.003;
+A = rand(5,5)/3;%[[-0.4 0.2 0.8];[0.1 -0.3 0.2];[0.1 0.2 0.1]];
+eig(A)
+B = rand(5,1);%[0.2;1.1;-0.2];
+sys = ss(A,B,eye(size(A)),[],dt);
+%sys
+ttape = (0:dt:5)';
+N = numel(ttape);
+utape = zeros(size(ttape,1),1);
+ranges = 0.15*[[0 1];[2 4.5];[8.3 9];[16 16.5]];
+coefs = [1;-1;1;-1];
+K = size(ranges,1);
+for i=1:K
+    s = round(ranges(i,1)/dt)+1;
+    e = round(ranges(i,2)/dt);
+    utape(s:e) = utape(s:e)+coefs(i);
+end
+sfigure(2);
+plot(ttape,utape)
+%for i=2:N
+%    utape(i,:) = utape(i-1,:)+(2*rand(1,2)-1)*diag([1.0 0.03]);
+%end
+xtape=lsim(sys,utape,ttape);
+sfigure(1);
+lsim(sys,utape,ttape)
+%%
+ytape = cumtrapz(ttape,xtape);
+sfigure(1);
+plot(ttape,xtape);
+sfigure(2);
+plot(ttape,ytape);
+%%
+M = [[xtape'*xtape xtape'*ytape];[ytape'*xtape ytape'*ytape]];
+N = diag([0 0 -1 -1]);
+[V,D]=eig(M,N)
+w = V(1:2,3);
+v = -V(3:4,3);
+%%
+P = [v';w'];
+A2=P*A/P;
+B2=P*B;
+A2
+B2
