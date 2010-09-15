@@ -29,8 +29,8 @@ plot(ttape{trial},theta{trial})
 
 
 %%
-start=[5.0 5.0 3.8 5.0];
-fin=[115.0 102.0 12.0 165];
+start=[1.3 5.0 0.42 5.0];
+fin=[120.0 102.0 12.0 165];
 si=round(start/dt);
 ei=round(fin/dt);
 t2=cell(K,1); th2=cell(K,1); dth2=cell(K,1); d2th2=cell(K,1);
@@ -47,6 +47,8 @@ for i=1:K
     N{i}=numel(region);
 end
 clear region;
+%%
+
 %% break the data up into regions, discard non-linear regions
 ts = 0.19; % timescale for a region
 alpha = 1.09; % only take regions where norm(Ax-b,2) < alpha * norm(b,2)
